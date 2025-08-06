@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Cosmic Jump</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      touch-action: none;
+    }
+    body {
+      overflow: hidden;
+      background: #0f0c29;
+      font-family: Arial, sans-serif;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+    }
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #gameOverScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      z-index: 100;
+    }
+    #restartBtn {
+      margin-top: 20px;
+      padding: 12px 24px;
+      background: #ff6b6b;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 18px;
+    }
+    #swipeGuide {
+      position: absolute;
+      bottom: 30px;
+      width: 100%;
+      text-align: center;
+      color: rgba(255,255,255,0.7);
+      font-size: 16px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.5; }
+      50% { opacity: 1; }
+      100% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="swipeGuide">Свайпайте влево/вправо для управления</div>
+  
+  <div id="gameOverScreen">
+    <h1>Игра окончена</h1>
+    <p id="finalScore">Счёт: 0</p>
+    <button id="restartBtn">Играть снова</button>
+  </div>
+
+  <script>
+    // ===== Инициализация =====
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let canvasWidth = window.innerWidth;
+    let canvasHeight = window.innerHeight;
+
+    function resizeCanvas() {
+      canvasWidth = canvas.width = window.innerWidth;
+      canvasHeight = canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ===== Игровые переменные =====
+    let platforms = [];
+    let blackHoles = [];
+    let score = 0;
+    let isGameOver = false;
+    let lastFrameTime = 0;
+    let moveDirection = 0;
+    const PLATFORM_TYPES = {
+      NORMAL: 0,
+      BREAKABLE: 1,
+      MOVING: 2
+    };
+
+    // ===== Игрок =====
+    const player = {
+      x: canvasWidth / 2 - 20,
+      y: canvasHeight - 100,
+      width: 30,
+      height: 40,
+      velocityY: 0,
+      velocityX: 0,
+      jumpStrength: -14,
+      coinCount: 0,
+      color: '#4FC3F7',
+      isJumping: false
+    };
+
+    // ===== Управление свайпами =====
+    let touchStartX = 0;
+    let isSwiping = false;
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      touchStartX = e.touches[0].clientX;
+      isSwiping = true;
+      document.getElementById('swipeGuide').style.display = 'none';
+    });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!isSwiping) return;
+      
+      const touchX = e.touches[0].clientX;
+      moveDirection = Math.sign(touchX - touchStartX) * 0.5; // Чувствительность
+    });
+
+    canvas.addEventListener('touchend', () => {
+      isSwiping = false;
+      moveDirection = 0;
+    });
+
+    // Для тестирования на ПК
+    canvas.addEventListener('mousedown', (e) => {
+      touchStartX = e.clientX;
+      isSwiping = true;
+      document.getElementById('swipeGuide').style.display = 'none';
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isSwiping) return;
+      moveDirection = Math.sign(e.clientX - touchStartX) * 0.5;
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      isSwiping = false;
+      moveDirection = 0;
+    });
+
+    // ===== Платформы =====
+    function createPlatforms() {
+      platforms = [];
+      blackHoles = [];
+      
+      // Стартовая платформа
+      platforms.push({
+        x: canvasWidth / 2 - 50,
+        y: canvasHeight - 50,
+        width: 100,
+        height: 15,
+        type: PLATFORM_TYPES.NORMAL,
+        color: '#4CAF50'
+      });
+      
+      // Генерация остальных платформ
+      for (let i = 1; i < 15; i++) {
+        const platformType = getRandomPlatformType(i);
+        const isBlackHole = Math.random() < 0.1 && i > 5;
+        
+        if (isBlackHole) {
+          blackHoles.push({
+            x: Math.random() * (canvasWidth - 60),
+            y: canvasHeight - i * 150 - 50,
+            radius: 40,
+            rotation: 0,
+            pullStrength: 0.3
+          });
+        } else {
+          platforms.push({
+            x: Math.random() * (canvasWidth - 80),
+            y: canvasHeight - i * 150 - 50,
+            width: platformType === PLATFORM_TYPES.BREAKABLE ? 60 : 80,
+            height: 15,
+            type: platformType,
+            color: getPlatformColor(platformType),
+            moveDirection: platformType === PLATFORM_TYPES.MOVING ? (Math.random() > 0.5 ? 1 : -1) : 0,
+            moveSpeed: platformType === PLATFORM_TYPES.MOVING ? 0.5 : 0
+          });
+        }
+      }
+    }
+
+    function getRandomPlatformType(index) {
+      if (index % 7 === 0) return PLATFORM_TYPES.MOVING;
+      if (index % 3 === 0) return PLATFORM_TYPES.BREAKABLE;
+      return PLATFORM_TYPES.NORMAL;
+    }
+
+    function getPlatformColor(type) {
+      switch(type) {
+        case PLATFORM_TYPES.BREAKABLE: return '#FF9800';
+        case PLATFORM_TYPES.MOVING: return '#9C27B0';
+        default: return '#4CAF50';
+      }
+    }
+
+    // ===== Игровая логика =====
+    function resetGame() {
+      score = 0;
+      isGameOver = false;
+      player.coinCount = 0;
+      player.x = canvasWidth / 2 - 20;
+      player.y = canvasHeight - 100;
+      player.velocityY = 0;
+      player.velocityX = 0;
+      player.isJumping = false;
+      
+      createPlatforms();
+      document.getElementById('gameOverScreen').style.display = 'none';
+      document.getElementById('swipeGuide').style.display = 'block';
+      
+      if (!lastFrameTime) {
+        lastFrameTime = performance.now();
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    function updatePlayer(deltaTime) {
+      // Автопрыжки
+      if (!player.isJumping && player.velocityY >= 0) {
+        player.velocityY = player.jumpStrength;
+        player.isJumping = true;
+      }
+      
+      // Управление в воздухе
+      player.velocityX = moveDirection * 10;
+      player.x += player.velocityX * deltaTime;
+      
+      // Гравитация
+      player.velocityY += 0.0015 * deltaTime;
+      player.y += player.velocityY * deltaTime;
+      
+      // Ограничение границ
+      player.x = Math.max(0, Math.min(canvasWidth - player.width, player.x));
+      
+      // Проверка столкновений с платформами
+      let landed = false;
+      platforms.forEach((platform, index) => {
+        if (
+          player.velocityY > 0 &&
+          player.x + player.width > platform.x &&
+          player.x < platform.x + platform.width &&
+          player.y + player.height >= platform.y &&
+          player.y + player.height <= platform.y + platform.height
+        ) {
+          player.velocityY = player.jumpStrength;
+          player.y = platform.y - player.height;
+          player.isJumping = false;
+          landed = true;
+          
+          // Обработка особых платформ
+          if (platform.type === PLATFORM_TYPES.BREAKABLE) {
+            setTimeout(() => {
+              platforms.splice(index, 1);
+            }, 200);
+          }
+        }
+        
+        // Движение платформ
+        if (platform.type === PLATFORM_TYPES.MOVING) {
+          platform.x += platform.moveSpeed * platform.moveDirection * deltaTime;
+          
+          if (platform.x <= 0 || platform.x + platform.width >= canvasWidth) {
+            platform.moveDirection *= -1;
+          }
+        }
+      });
+      
+      // Черные дыры
+      blackHoles.forEach(hole => {
+        hole.rotation += 0.01 * deltaTime;
+        
+        // Притяжение
+        const dx = (hole.x + 40) - (player.x + player.width/2);
+        const dy = (hole.y + 40) - (player.y + player.height/2);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < 150) {
+          const pullForce = hole.pullStrength * (1 - distance/150);
+          player.x += dx * 0.01 * pullForce * deltaTime;
+          player.y += dy * 0.01 * pullForce * deltaTime;
+        }
+        
+        // Попадание в дыру
+        if (distance < 30) {
+          endGame();
+        }
+      });
+      
+      // Подъем мира при прыжке вверх
+      if (player.y < canvasHeight * 0.3) {
+        const dy = canvasHeight * 0.3 - player.y;
+        player.y = canvasHeight * 0.3;
+        
+        platforms.forEach(p => p.y += dy);
+        blackHoles.forEach(h => h.y += dy);
+        
+        score += Math.floor(dy / 3);
+      }
+      
+      // Генерация новых платформ и дыр
+      platforms = platforms.filter(platform => {
+        if (platform.y > canvasHeight) {
+          const platformType = getRandomPlatformType(Math.floor(score / 1000));
+          const isBlackHole = Math.random() < 0.1 && score > 500;
+          
+          if (isBlackHole) {
+            blackHoles.push({
+              x: Math.random() * (canvasWidth - 60),
+              y: -100,
+              radius: 40,
+              rotation: 0,
+              pullStrength: 0.3
+            });
+          } else {
+            platforms.push({
+              x: Math.random() * (canvasWidth - 80),
+              y: -15,
+              width: platformType === PLATFORM_TYPES.BREAKABLE ? 60 : 80,
+              height: 15,
+              type: platformType,
+              color: getPlatformColor(platformType),
+              moveDirection: platformType === PLATFORM_TYPES.MOVING ? (Math.random() > 0.5 ? 1 : -1) : 0,
+              moveSpeed: platformType === PLATFORM_TYPES.MOVING ? 0.5 : 0
+            });
+          }
+          return false;
+        }
+        return true;
+      });
+      
+      // Удаление дыр за экраном
+      blackHoles = blackHoles.filter(hole => hole.y < canvasHeight + 100);
+      
+      // Конец игры при падении
+      if (player.y > canvasHeight + 100) {
+        endGame();
+      }
+    }
+
+    function draw() {
+      // Космический фон
+      ctx.fillStyle = '#0f0c29';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      
+      // Звезды
+      drawStars();
+      
+      // Черные дыры
+      blackHoles.forEach(hole => {
+        ctx.save();
+        ctx.translate(hole.x + hole.radius, hole.y + hole.radius);
+        ctx.rotate(hole.rotation);
+        
+        // Гравитационное поле
+        const gradient = ctx.createRadialGradient(0, 0, 10, 0, 0, hole.radius);
+        gradient.addColorStop(0, 'rgba(0,0,0,0.8)');
+        gradient.addColorStop(0.7, 'rgba(50,0,80,0.5)');
+        gradient.addColorStop(1, 'transparent');
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, hole.radius, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        
+        // Аккреционный диск
+        ctx.beginPath();
+        ctx.ellipse(0, 0, hole.radius, hole.radius/3, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(200,100,255,0.7)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        
+        ctx.restore();
+      });
+      
+      // Платформы
+      platforms.forEach(platform => {
+        ctx.fillStyle = platform.color;
+        ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+        
+        // Эффект для разрушающихся
+        if (platform.type === PLATFORM_TYPES.BREAKABLE) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(platform.x + 2, platform.y + 2, platform.width - 4, platform.height - 4);
+        }
+        
+        // Эффект для движущихся
+        if (platform.type === PLATFORM_TYPES.MOVING) {
+          ctx.fillStyle = 'rgba(255,255,255,0.3)';
+          ctx.beginPath();
+          ctx.arc(
+            platform.x + 10, 
+            platform.y + platform.height/2, 
+            3, 0, Math.PI * 2
+          );
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(
+            platform.x + platform.width - 10, 
+            platform.y + platform.height/2, 
+            3, 0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+      });
+      
+      // Игрок
+      ctx.fillStyle = player.color;
+      ctx.beginPath();
+      ctx.roundRect(player.x, player.y, player.width, player.height, [5, 5, 0, 0]);
+      ctx.fill();
+      
+      // Глаза для ориентации
+      ctx.fillStyle = 'white';
+      ctx.beginPath();
+      ctx.arc(
+        player.x + player.width/2 + (moveDirection * 5), 
+        player.y + player.height/3, 
+        4, 0, Math.PI * 2
+      );
+      ctx.fill();
+      
+      // Счет
+      ctx.fillStyle = 'white';
+      ctx.font = '20px Arial';
+      ctx.fillText(`Очки: ${score}`, 20, 40);
+    }
+
+    function drawStars() {
+      ctx.fillStyle = 'white';
+      for (let i = 0; i < 100; i++) {
+        const x = Math.random() * canvasWidth;
+        const y = (Math.random() * canvasHeight + score * 0.5) % canvasHeight;
+        const size = Math.random() * 1.5;
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+
+    function endGame() {
+      isGameOver = true;
+      document.getElementById('finalScore').textContent = `Очки: ${score}`;
+      document.getElementById('gameOverScreen').style.display = 'flex';
+    }
+
+    function gameLoop(timestamp) {
+      if (!lastFrameTime) lastFrameTime = timestamp;
+      const deltaTime = Math.min(30, timestamp - lastFrameTime);
+      lastFrameTime = timestamp;
+      
+      if (!isGameOver) {
+        updatePlayer(deltaTime);
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    // Запуск игры
+    document.getElementById('restartBtn').addEventListener('click', resetGame);
+    resetGame();
+
+    // Блокировка масштабирования
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+    document.addEventListener('touchmove', (e) => {
+      if (e.scale !== 1) e.preventDefault();
+    }, { passive: false });
+  </script>
+</body>
+</html>
